@@ -9,9 +9,9 @@ use crate::v1::{decrypt_paseto as V1Decrypt, verify_paseto as V1Verify};
 use crate::v2::{decrypt_paseto as V2Decrypt, verify_paseto as V2Verify};
 
 use chrono::prelude::*;
-use failure::Error;
 #[cfg(feature = "v2")]
-use ring::signature::{Ed25519KeyPair, KeyPair};
+use ed25519_dalek::Keypair;
+use failure::Error;
 use serde_json::{from_str as ParseJson, Value as JsonValue};
 
 pub mod builder;
@@ -23,7 +23,7 @@ pub enum PasetoPublicKey {
   #[cfg(feature = "v1")]
   RSAPublicKey(Vec<u8>),
   #[cfg(feature = "v2")]
-  ED25519KeyPair(Ed25519KeyPair),
+  ED25519KeyPair(Keypair),
   #[cfg(feature = "v2")]
   ED25519PublicKey(Vec<u8>),
 }
@@ -156,7 +156,7 @@ pub fn validate_public_token(token: &str, footer: Option<&str>, key: &PasetoPubl
     if token.starts_with("v2.public.") {
       return match key {
         PasetoPublicKey::ED25519KeyPair(key_pair) => {
-          let internal_msg = V2Verify(token, footer, key_pair.public_key().as_ref())?;
+          let internal_msg = V2Verify(token, footer, key_pair.public.to_bytes().as_ref())?;
           validate_potential_json_blob(&internal_msg)
         }
         PasetoPublicKey::ED25519PublicKey(pub_key_contents) => {
@@ -189,8 +189,6 @@ pub fn validate_public_token(token: &str, footer: Option<&str>, key: &PasetoPubl
 #[cfg(test)]
 mod unit_tests {
   use super::*;
-  #[cfg(feature = "v2")]
-  use ring::rand::SystemRandom;
   use serde_json::json;
 
   #[test]
@@ -212,12 +210,8 @@ mod unit_tests {
       .build()
       .expect("Failed to construct paseto token w/ builder!");
 
-    validate_local_token(
-      &token,
-      Some("footer"),
-      &"YELLOW SUBMARINE, BLACK WIZARDRY".as_bytes(),
-    )
-    .expect("Failed to validate token!");
+    validate_local_token(&token, Some("footer"), &"YELLOW SUBMARINE, BLACK WIZARDRY".as_bytes())
+      .expect("Failed to validate token!");
   }
 
   #[test]
@@ -239,12 +233,7 @@ mod unit_tests {
       .build()
       .expect("Failed to construct paseto token w/ builder!");
 
-    assert!(validate_local_token(
-      &token,
-      Some("footer"),
-      &"YELLOW SUBMARINE, BLACK WIZARDRY".as_bytes()
-    )
-    .is_err());
+    assert!(validate_local_token(&token, Some("footer"), &"YELLOW SUBMARINE, BLACK WIZARDRY".as_bytes()).is_err());
   }
 
   #[test]
@@ -253,10 +242,10 @@ mod unit_tests {
     let current_date_time = Utc::now();
     let dt = Utc.ymd(current_date_time.year() + 1, 7, 8).and_hms(9, 10, 11);
 
-    let sys_rand = SystemRandom::new();
-    let key_pkcs8 = Ed25519KeyPair::generate_pkcs8(&sys_rand).expect("Failed to generate pkcs8 key!");
-    let as_key = Ed25519KeyPair::from_pkcs8(key_pkcs8.as_ref()).expect("Failed to parse keypair");
-    let cloned_key = Ed25519KeyPair::from_pkcs8(key_pkcs8.as_ref()).expect("Failed to parse keypair");
+    let mut sys_rand = rand::rngs::OsRng {};
+    let as_key = Keypair::generate(&mut sys_rand);
+    let key_bytes = as_key.to_bytes();
+    let cloned_key = Keypair::from_bytes(&key_bytes).unwrap();
 
     let token = PasetoBuilder::new()
       .set_ed25519_key(as_key)
@@ -282,10 +271,10 @@ mod unit_tests {
     let current_date_time = Utc::now();
     let dt = Utc.ymd(current_date_time.year() + 1, 7, 8).and_hms(9, 10, 11);
 
-    let sys_rand = SystemRandom::new();
-    let key_pkcs8 = Ed25519KeyPair::generate_pkcs8(&sys_rand).expect("Failed to generate pkcs8 key!");
-    let as_key = Ed25519KeyPair::from_pkcs8(key_pkcs8.as_ref()).expect("Failed to parse keypair");
-    let cloned_key = Ed25519KeyPair::from_pkcs8(key_pkcs8.as_ref()).expect("Failed to parse keypair");
+    let mut sys_rand = rand::rngs::OsRng {};
+    let as_key = Keypair::generate(&mut sys_rand);
+    let key_bytes = as_key.to_bytes();
+    let cloned_key = Keypair::from_bytes(&key_bytes).unwrap();
 
     let token = PasetoBuilder::new()
       .set_ed25519_key(as_key)
@@ -304,7 +293,7 @@ mod unit_tests {
     validate_public_token(
       &token,
       Some("footer"),
-      &PasetoPublicKey::ED25519PublicKey(Vec::from(cloned_key.public_key().as_ref())),
+      &PasetoPublicKey::ED25519PublicKey(Vec::from(cloned_key.public.to_bytes().as_ref())),
     )
     .expect("Failed to validate token!");
   }
@@ -315,10 +304,10 @@ mod unit_tests {
     let current_date_time = Utc::now();
     let dt = Utc.ymd(current_date_time.year() - 1, 7, 8).and_hms(9, 10, 11);
 
-    let sys_rand = SystemRandom::new();
-    let key_pkcs8 = Ed25519KeyPair::generate_pkcs8(&sys_rand).expect("Failed to generate pkcs8 key!");
-    let as_key = Ed25519KeyPair::from_pkcs8(key_pkcs8.as_ref()).expect("Failed to parse keypair");
-    let cloned_key = Ed25519KeyPair::from_pkcs8(key_pkcs8.as_ref()).expect("Failed to parse keypair");
+    let mut sys_rand = rand::rngs::OsRng {};
+    let as_key = Keypair::generate(&mut sys_rand);
+    let key_bytes = as_key.to_bytes();
+    let cloned_key = Keypair::from_bytes(&key_bytes).unwrap();
 
     let token = PasetoBuilder::new()
       .set_ed25519_key(as_key)

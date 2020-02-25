@@ -1,22 +1,26 @@
 //! An Implementation of Paseto V2 "local" tokens (or tokens that are encrypted with a shared secret).
 
-use crate::errors::{GenericError, SodiumErrors};
+use crate::errors::{CryptoErrors, GenericError};
 use crate::pae::pae;
 
+use aead::{generic_array::GenericArray, Aead, NewAead};
 use base64::{decode_config, encode_config, URL_SAFE_NO_PAD};
+use blake2::digest::{Input, VariableOutput};
+use blake2::VarBlake2b;
+use chacha20poly1305::XChaCha20Poly1305;
+use constant_time_eq::constant_time_eq;
 use failure::Error;
-use ring::constant_time::verify_slices_are_equal as ConstantTimeEquals;
-use ring::rand::{SecureRandom, SystemRandom};
-use sodiumoxide::crypto::aead::xchacha20poly1305_ietf::{open as Decrypt, seal as Encrypt, Key, Nonce};
-use sodiumoxide::crypto::generichash::State as GenericHashState;
+use rand::Rng;
+
+type Nonce = [u8; 24];
 
 /// Encrypt a "v2.local" paseto token.
 ///
 /// Returns a result of a string if encryption was successful.
 pub fn local_paseto(msg: &str, footer: Option<&str>, key: &[u8]) -> Result<String, Error> {
-  let rng = SystemRandom::new();
+  let mut rng = rand::rngs::OsRng {};
   let mut buff: [u8; 24] = [0u8; 24];
-  let res = rng.fill(&mut buff);
+  let res = rng.try_fill(&mut buff);
   if res.is_err() {
     return Err(GenericError::RandomError {})?;
   }
@@ -35,39 +39,28 @@ fn underlying_local_paseto(msg: &str, footer: Option<&str>, nonce_key: &[u8; 24]
   let footer_frd = footer.unwrap_or("");
   // Specify result type to give rust compiler hints on types.
   let res: Result<(Nonce, Vec<u8>), Error> = {
-    if let Ok(mut state) = GenericHashState::new(24, Some(nonce_key)) {
-      if let Ok(_) = state.update(msg.as_bytes()) {
-        if let Ok(finalized) = state.finalize() {
-          let ref_finalized = finalized.as_ref();
-          if let Some(nonce) = Nonce::from_slice(ref_finalized) {
-            let to_return: (Nonce, Vec<u8>) = (nonce, Vec::from(ref_finalized));
-            Ok(to_return)
-          } else {
-            Err(SodiumErrors::FunctionError {})?
-          }
-        } else {
-          Err(SodiumErrors::FunctionError {})?
-        }
-      } else {
-        Err(SodiumErrors::FunctionError {})?
-      }
-    } else {
-      Err(SodiumErrors::FunctionError {})?
-    }
+    let mut state = VarBlake2b::new_keyed(nonce_key, 24);
+    state.input(msg.as_bytes());
+    let finalized = state.vec_result();
+    let mut nonce = [0u8; 24];
+    nonce.copy_from_slice(&finalized[..]);
+    let to_return: (Nonce, Vec<u8>) = (nonce, finalized);
+    Ok(to_return)
   };
   let (nonce, nonce_vec) = res?;
-  let key_obj = Key::from_slice(key);
-  if key_obj.is_none() {
-    return Err(SodiumErrors::InvalidKey {})?;
-  }
-  let key_obj = key_obj.unwrap();
 
   let header_as_vec = Vec::from(header.as_bytes());
   let footer_as_vec = Vec::from(footer_frd.as_bytes());
 
   let pre_auth = pae(vec![header_as_vec, nonce_vec.clone(), footer_as_vec]);
-
-  let crypted = Encrypt(msg.as_bytes(), Some(pre_auth.as_ref()), &nonce, &key_obj);
+  let aead = XChaCha20Poly1305::new(GenericArray::clone_from_slice(key));
+  let payload = aead::Payload {
+    msg: msg.as_bytes(),
+    aad: pre_auth.as_ref(),
+  };
+  let crypted = aead
+    .encrypt(GenericArray::from_slice(&nonce), payload)
+    .map_err(|_| CryptoErrors::EncryptionError {})?;
 
   let mut n_and_c = Vec::new();
   n_and_c.extend_from_slice(&nonce_vec);
@@ -107,7 +100,7 @@ pub fn decrypt_paseto(token: &str, footer: Option<&str>, key: &[u8]) -> Result<S
     }
     let as_base64 = encode_config(footer_str.as_bytes(), URL_SAFE_NO_PAD);
 
-    if ConstantTimeEquals(as_base64.as_bytes(), token_parts[3].as_bytes()).is_err() {
+    if !constant_time_eq(as_base64.as_bytes(), token_parts[3].as_bytes()) {
       return Err(GenericError::InvalidFooter {})?;
     }
   }
@@ -122,19 +115,17 @@ pub fn decrypt_paseto(token: &str, footer: Option<&str>, key: &[u8]) -> Result<S
   let static_header = Vec::from("v2.local.".as_bytes());
   let vecd_nonce = nonce.to_vec();
   let vecd_footer = Vec::from(footer_str.as_bytes());
+
   let pre_auth = pae(vec![static_header, vecd_nonce, vecd_footer]);
+  let aead = XChaCha20Poly1305::new(GenericArray::clone_from_slice(key));
+  let payload = aead::Payload {
+    msg: ciphertext.as_ref(),
+    aad: pre_auth.as_ref(),
+  };
 
-  let nonce_obj = Nonce::from_slice(nonce);
-  let key_obj = Key::from_slice(key);
-  if nonce_obj.is_none() || key_obj.is_none() {
-    return Err(SodiumErrors::InvalidKey {})?;
-  }
-  let nonce_obj = nonce_obj.unwrap();
-  let key_obj = key_obj.unwrap();
-
-  let decrypted = Decrypt(ciphertext, Some(&pre_auth), &nonce_obj, &key_obj);
+  let decrypted = aead.decrypt(GenericArray::from_slice(nonce), payload);
   if decrypted.is_err() {
-    return Err(SodiumErrors::FunctionError {})?;
+    return Err(CryptoErrors::FunctionError {})?;
   }
   let decrypted = decrypted.unwrap();
 

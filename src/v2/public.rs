@@ -5,14 +5,14 @@ use crate::errors::GenericError;
 use crate::pae::pae;
 
 use base64::{decode_config, encode_config, URL_SAFE_NO_PAD};
+use constant_time_eq::constant_time_eq;
+use ed25519_dalek::{Keypair, PublicKey, Signature};
 use failure::Error;
-use ring::constant_time::verify_slices_are_equal as ConstantTimeEquals;
-use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
 
 /// Sign a "v2.public" paseto token.
 ///
 /// Returns a result of a string if signing was successful.
-pub fn public_paseto(msg: &str, footer: Option<&str>, key_pair: &Ed25519KeyPair) -> Result<String, Error> {
+pub fn public_paseto(msg: &str, footer: Option<&str>, key_pair: &Keypair) -> Result<String, Error> {
   let header = "v2.public.";
   let footer_frd = footer.unwrap_or("");
 
@@ -24,7 +24,7 @@ pub fn public_paseto(msg: &str, footer: Option<&str>, key_pair: &Ed25519KeyPair)
 
   let sig = key_pair.sign(&pre_auth);
   let mut m_and_sig = Vec::from(msg.as_bytes());
-  m_and_sig.extend_from_slice(sig.as_ref());
+  m_and_sig.extend_from_slice(sig.to_bytes().as_ref());
 
   let token = if footer_frd.is_empty() {
     format!("{}{}", header, encode_config(&m_and_sig, URL_SAFE_NO_PAD))
@@ -58,7 +58,7 @@ pub fn verify_paseto(token: &str, footer: Option<&str>, public_key: &[u8]) -> Re
     }
     let footer_encoded = encode_config(footer_as_str.as_bytes(), URL_SAFE_NO_PAD);
 
-    if ConstantTimeEquals(footer_encoded.as_bytes(), token_parts[3].as_bytes()).is_err() {
+    if !constant_time_eq(footer_encoded.as_bytes(), token_parts[3].as_bytes()) {
       return Err(GenericError::InvalidFooter {})?;
     }
   }
@@ -77,8 +77,15 @@ pub fn verify_paseto(token: &str, footer: Option<&str>, public_key: &[u8]) -> Re
     Vec::from(footer_as_str.as_bytes()),
   ]);
 
-  let pk_unparsed = UnparsedPublicKey::new(&ED25519, public_key);
-  let verify_res = pk_unparsed.verify(&pre_auth, sig);
+  let pk = match PublicKey::from_bytes(public_key) {
+    Ok(pk) => pk,
+    Err(_) => return Err(GenericError::InvalidToken {})?,
+  };
+  let sig = match Signature::from_bytes(sig) {
+    Ok(sig) => sig,
+    Err(_) => return Err(GenericError::InvalidToken {})?,
+  };
+  let verify_res = pk.verify(&pre_auth, &sig);
   if verify_res.is_err() {
     return Err(GenericError::InvalidToken {})?;
   }
@@ -90,14 +97,12 @@ pub fn verify_paseto(token: &str, footer: Option<&str>, public_key: &[u8]) -> Re
 mod unit_tests {
   use super::*;
 
-  use ring::rand::SystemRandom;
-  use ring::signature::KeyPair;
+  use ed25519_dalek::Keypair;
 
   #[test]
   fn paseto_public_verify() {
-    let sys_rand = SystemRandom::new();
-    let key_pkcs8 = Ed25519KeyPair::generate_pkcs8(&sys_rand).expect("Failed to generate pkcs8 key!");
-    let as_key = Ed25519KeyPair::from_pkcs8(key_pkcs8.as_ref()).expect("Failed to parse keypair");
+    let mut sys_rand = rand::rngs::OsRng {};
+    let as_key = Keypair::generate(&mut sys_rand);
 
     // Test messages without footers.
     let public_token_one = public_paseto("msg", None, &as_key).expect("Failed to public encode msg with no footer!");
@@ -113,8 +118,8 @@ mod unit_tests {
     assert!(public_token_one.starts_with("v2.public."));
     assert!(public_token_two.starts_with("v2.public."));
 
-    let verified_one = verify_paseto(&public_token_one.clone(), None, as_key.public_key().as_ref());
-    let verified_two = verify_paseto(&public_token_two, None, as_key.public_key().as_ref());
+    let verified_one = verify_paseto(&public_token_one.clone(), None, as_key.public.to_bytes().as_ref());
+    let verified_two = verify_paseto(&public_token_two, None, as_key.public.to_bytes().as_ref());
 
     // Verify the above tokens.
     assert!(verified_one.is_ok());
@@ -125,7 +130,7 @@ mod unit_tests {
       "{\"data\": \"yo bro\", \"expires\": \"2018-01-01T00:00:00+00:00\"}"
     );
 
-    let should_not_verify_one = verify_paseto(&public_token_one, Some("data"), as_key.public_key().as_ref());
+    let should_not_verify_one = verify_paseto(&public_token_one, Some("data"), as_key.public.as_bytes().as_ref());
 
     // Verify if it doesn't have a footer in public that it won't pass a verification with a footer.
     assert!(should_not_verify_one.is_err());
@@ -143,8 +148,8 @@ mod unit_tests {
     assert!(public_token_three.starts_with("v2.public."));
     assert!(public_token_four.starts_with("v2.public."));
 
-    let verified_three = verify_paseto(&public_token_three, Some("footer"), as_key.public_key().as_ref());
-    let verified_four = verify_paseto(&public_token_four, Some("footer"), as_key.public_key().as_ref());
+    let verified_three = verify_paseto(&public_token_three, Some("footer"), as_key.public.to_bytes().as_ref());
+    let verified_four = verify_paseto(&public_token_four, Some("footer"), as_key.public.to_bytes().as_ref());
 
     // Verify the footer tokens.
     assert!(verified_three.is_ok());
@@ -156,8 +161,8 @@ mod unit_tests {
     );
 
     // Validate no footer + invalid footer both fail on tokens encode with footer.
-    let should_not_verify_two = verify_paseto(&public_token_three, None, as_key.public_key().as_ref());
-    let should_not_verify_three = verify_paseto(&public_token_three, Some("bleh"), as_key.public_key().as_ref());
+    let should_not_verify_two = verify_paseto(&public_token_three, None, as_key.public.to_bytes().as_ref());
+    let should_not_verify_three = verify_paseto(&public_token_three, Some("bleh"), as_key.public.to_bytes().as_ref());
 
     assert!(should_not_verify_two.is_err());
     assert!(should_not_verify_three.is_err());

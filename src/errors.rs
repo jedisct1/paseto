@@ -1,7 +1,7 @@
 use failure_derive::*;
 
 #[derive(Debug, Fail)]
-pub enum SodiumErrors {
+pub enum CryptoErrors {
   #[fail(display = "invalid key size, needed: {} got: {}", size_needed, size_provided)]
   InvalidKeySize { size_provided: usize, size_needed: usize },
   #[fail(display = "invalid nonce size, needed: {} got: {}", size_needed, size_provided)]
@@ -12,6 +12,8 @@ pub enum SodiumErrors {
   FunctionError {},
   #[fail(display = "Invalid Output Size specified")]
   InvalidOutputSize {},
+  #[fail(display = "Unable to encrypt")]
+  EncryptionError {},
 }
 
 #[derive(Debug, Fail)]

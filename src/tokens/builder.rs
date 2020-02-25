@@ -10,9 +10,9 @@ use crate::v1::public_paseto as V1Public;
 use crate::v2::{local_paseto as V2Local, public_paseto as V2Public};
 
 use chrono::prelude::*;
-use failure::Error;
 #[cfg(feature = "v2")]
-use ring::signature::Ed25519KeyPair;
+use ed25519_dalek::Keypair;
+use failure::Error;
 #[cfg(feature = "v1")]
 use ring::signature::RsaKeyPair;
 use serde_json::{json, to_string, Value};
@@ -30,7 +30,7 @@ pub struct PasetoBuilder {
   rsa_key: Option<Vec<u8>>,
   /// The ED25519 Key Pair, for V2 Public Tokens.
   #[cfg(feature = "v2")]
-  ed_key: Option<Ed25519KeyPair>,
+  ed_key: Option<Keypair>,
   /// Any extra claims you want to store in your json.
   extra_claims: HashMap<String, Value>,
 }
@@ -106,7 +106,7 @@ impl PasetoBuilder {
   /// Sets the ED25519 Key pair.
   ///
   /// NOTE: This will not be used if you set a symmetric encryption key.
-  pub fn set_ed25519_key(mut self, key_pair: Ed25519KeyPair) -> Self {
+  pub fn set_ed25519_key(mut self, key_pair: Keypair) -> Self {
     self.ed_key = Some(key_pair);
     self
   }

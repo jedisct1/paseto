@@ -1,10 +1,5 @@
 #[cfg(all(feature = "v2", feature = "easy_tokens"))]
-use {
-  chrono::prelude::*,
-  ring::rand::SystemRandom,
-  ring::signature::Ed25519KeyPair,
-  serde_json::json,
-};
+use {chrono::prelude::*, ed25519_dalek::Keypair, serde_json::json};
 
 fn main() {
   #[cfg(all(feature = "v2", feature = "easy_tokens"))]
@@ -12,10 +7,10 @@ fn main() {
     let current_date_time = Utc::now();
     let dt = Utc.ymd(current_date_time.year() + 1, 7, 8).and_hms(9, 10, 11);
 
-    let sys_rand = SystemRandom::new();
-    let key_pkcs8 = Ed25519KeyPair::generate_pkcs8(&sys_rand).expect("Failed to generate pkcs8 key!");
-    let as_key = Ed25519KeyPair::from_pkcs8(key_pkcs8.as_ref()).expect("Failed to parse keypair");
-    let cloned_key = Ed25519KeyPair::from_pkcs8(key_pkcs8.as_ref()).expect("Failed to parse keypair");
+    let mut sys_rand = rand::rngs::OsRng {};
+    let as_key = Keypair::generate(&mut sys_rand);
+    let key_bytes = as_key.to_bytes();
+    let cloned_key = Keypair::from_bytes(&key_bytes).unwrap();
 
     let token = paseto::tokens::PasetoBuilder::new()
       .set_ed25519_key(as_key)

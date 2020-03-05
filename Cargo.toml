@@ -13,11 +13,11 @@ edition = "2018"
 default = ["v2", "easy_tokens"]
 v1 = ["openssl"]
 v2 = ["ed25519-dalek"]
-easy_tokens = ["serde_json", "chrono-wasi"]
+easy_tokens = ["serde_json", "chrono-wasi07"]
 
 [dependencies]
 base64 = "^0.11"
-chrono-wasi = { version = "^0.4", optional = true, features = ["serde"] }
+chrono-wasi07 = { version = "^0.4", optional = true, features = ["serde"] }
 failure = "^0.1"
 failure_derive = "^0.1"
 openssl = { version = "~0.10.24", optional = true }
